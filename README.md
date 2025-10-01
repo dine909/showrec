@@ -95,9 +95,10 @@ Record from a different stream URL:
 
 ## Output Files
 
-Files are saved in MP3 format with automatic naming:
+Files are saved in MP3 format with automatic naming based on recording start time:
 - Format: `bassdrive_YYYYMMDD_HHMM.mp3`
 - Example: `bassdrive_20250924_1430.mp3`
+- **Note**: Timestamp reflects when recording actually begins, not when script starts
 
 ## Monitoring and Logging
 

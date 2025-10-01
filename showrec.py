@@ -221,15 +221,6 @@ Examples:
     
     args = parser.parse_args()
     
-    # Generate default output filename if not specified
-    if not args.output:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-        args.output = f"bassdrive_{timestamp}.mp3"
-    
-    # Ensure output file has .mp3 extension
-    if not args.output.lower().endswith('.mp3'):
-        args.output += '.mp3'
-    
     # Convert duration to seconds
     duration_seconds = args.duration * 60
     
@@ -239,6 +230,15 @@ Examples:
     # Wait until start time if specified
     if args.start_time:
         wait_until_start_time(args.start_time)
+    
+    # Generate default output filename if not specified (after waiting, so it uses recording start time)
+    if not args.output:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+        args.output = f"bassdrive_{timestamp}.mp3"
+    
+    # Ensure output file has .mp3 extension
+    if not args.output.lower().endswith('.mp3'):
+        args.output += '.mp3'
     
     # Start recording
     record_stream(args.url, args.output, duration_seconds, 
