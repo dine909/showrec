@@ -13,6 +13,58 @@ import os
 import random
 from pathlib import Path
 
+class ProgressBar:
+    def __init__(self, width=50, show_time=True):
+        self.width = width
+        self.show_time = show_time
+        self.last_display = ""
+
+    def update(self, current, total, prefix="Progress", suffix=""):
+        """Update progress bar display"""
+        if total <= 0:
+            return
+
+        # Calculate progress ratio
+        progress_ratio = min(current / total, 1.0)
+        progress_percent = int(progress_ratio * 100)
+
+        # Create progress bar
+        filled_width = int(self.width * progress_ratio)
+        bar = "█" * filled_width + "░" * (self.width - filled_width)
+
+        # Format time if requested
+        time_info = ""
+        if self.show_time:
+            current_time_str = self._format_time(current)
+            total_time_str = self._format_time(total)
+            time_info = f" {current_time_str}/{total_time_str}"
+
+        # Create status line
+        status = f"{prefix}: [{bar}] {progress_percent:3d}%{time_info}{suffix}"
+
+        # Only update if different to avoid flicker
+        if status != self.last_display:
+            # Clear previous line and print new one
+            print(f"\r{status}", end="", flush=True)
+            self.last_display = status
+
+    def _format_time(self, seconds):
+        """Format seconds as MM:SS or H:MM:SS"""
+        seconds = int(seconds)
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes:02d}:{secs:02d}"
+
+    def clear(self):
+        """Clear the progress bar"""
+        print("\r" + " " * len(self.last_display) + "\r", end="", flush=True)
+        self.last_display = ""
+
 def wait_until_start_time(start_time_str):
     """Wait until the specified start time"""
     try:
@@ -28,8 +80,25 @@ def wait_until_start_time(start_time_str):
         
         if wait_seconds > 0:
             print(f"Waiting until {start_datetime.strftime('%Y-%m-%d %H:%M:%S')} to start recording...")
-            print(f"Time to wait: {int(wait_seconds // 3600)}h {int((wait_seconds % 3600) // 60)}m {int(wait_seconds % 60)}s")
-            time.sleep(wait_seconds)
+            
+            progress_bar = ProgressBar(width=40)
+            start_wait_time = time.time()
+            
+            while True:
+                elapsed = time.time() - start_wait_time
+                remaining = max(0, wait_seconds - elapsed)
+                
+                progress_bar.update(elapsed, wait_seconds, 
+                                  prefix="Waiting", 
+                                  suffix=f" ({int(remaining)}s remaining)")
+                
+                if elapsed >= wait_seconds:
+                    break
+                    
+                time.sleep(1)
+            
+            progress_bar.clear()
+            print("Starting recording now!")
         
     except ValueError:
         print("Error: Invalid time format. Please use HH:MM format (24-hour)")
@@ -57,6 +126,10 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
     total_bytes_written = initial_bytes
     retry_count = 0
     current_retry_delay = retry_delay
+    
+    # Initialize progress bar
+    progress_bar = ProgressBar(width=40)
+    last_progress_update = 0
     
     while True:
         try:
@@ -88,7 +161,6 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
             mode = 'ab' if file_exists else 'wb'
             with open(output_file, mode) as f:
                 chunk_start_time = time.time()
-                last_progress_time = time.time()
                 
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
@@ -100,23 +172,25 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
                         total_elapsed = current_time - start_time
                         
                         if total_elapsed >= duration_seconds:
-                            print("Recording duration reached!")
+                            progress_bar.clear()
+                            print("\nRecording duration reached!")
                             return
                         
-                        # Print progress every 30 seconds
-                        if current_time - last_progress_time >= 30:
-                            remaining_time = duration_seconds - total_elapsed
+                        # Update progress bar continuously
+                        if current_time - last_progress_update >= 1.0:  # Update every second
                             mb_written = total_bytes_written / (1024 * 1024)
-                            print(f"Recording... {int(total_elapsed)}s elapsed, "
-                                  f"{int(remaining_time)}s remaining, "
-                                  f"{mb_written:.1f} MB total")
-                            last_progress_time = current_time
+                            progress_bar.update(total_elapsed, duration_seconds, 
+                                              prefix="Recording", 
+                                              suffix=f" ({mb_written:.1f} MB)")
+                            last_progress_update = current_time
             
             # If we reach here, the stream ended naturally
-            print("Stream ended naturally")
+            progress_bar.clear()
+            print("\nStream ended naturally")
             break
             
         except KeyboardInterrupt:
+            progress_bar.clear()
             print("\nRecording interrupted by user")
             print(f"Partial recording saved: {output_file}")
             print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
@@ -127,7 +201,8 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
             print(f"✗ Connection failed: {e}")
             
             if retry_count > max_retries:
-                print(f"Maximum retry attempts ({max_retries}) exceeded. Giving up.")
+                progress_bar.clear()
+                print(f"\nMaximum retry attempts ({max_retries}) exceeded. Giving up.")
                 print(f"Partial recording saved: {output_file}")
                 print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
                 sys.exit(1)
@@ -135,7 +210,8 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
             # Calculate elapsed time to check if we should continue
             elapsed_time = time.time() - start_time
             if elapsed_time >= duration_seconds:
-                print("Recording duration completed during retry attempts!")
+                progress_bar.clear()
+                print("\nRecording duration completed during retry attempts!")
                 break
             
             # Exponential backoff with jitter
@@ -152,11 +228,13 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
                 file_exists = True
         
         except Exception as e:
-            print(f"Unexpected error during recording: {e}")
+            progress_bar.clear()
+            print(f"\nUnexpected error during recording: {e}")
             print(f"Partial recording saved: {output_file}")
             print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
             sys.exit(1)
     
+    progress_bar.clear()
     print(f"\nRecording completed! File saved as: {output_file}")
     print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
     if initial_bytes > 0:
