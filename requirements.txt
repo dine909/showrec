@@ -1,0 +1,19 @@
+# Core dependencies for showrec.py
+requests>=2.25.0
+
+# HLS/m3u8 streaming for showrec_hls.py
+streamlink>=6.0.0
+
+# Audio playback for playrec.py
+pygame>=2.0.0
+
+# Google Calendar integration for schedule_recordings.py
+google-api-python-client>=2.0.0
+google-auth-httplib2>=0.1.0
+google-auth-oauthlib>=0.5.0
+
+# Optional: Enhanced terminal handling
+# termios; sys_platform != "win32"
+
+# Note: ffmpeg can be used as alternative to streamlink for HLS recording
+# Install ffmpeg via: brew install ffmpeg (macOS) or apt-get install ffmpeg (Linux)

@@ -19,28 +19,41 @@ class ProgressBar:
         self.show_time = show_time
         self.last_display = ""
 
-    def update(self, current, total, prefix="Progress", suffix=""):
+    def update(self, current, total, prefix="Progress", suffix="", countdown=False):
         """Update progress bar display"""
         if total <= 0:
             return
 
-        # Calculate progress ratio
-        progress_ratio = min(current / total, 1.0)
-        progress_percent = int(progress_ratio * 100)
+        if countdown:
+            # For countdown: show remaining time as shrinking bar
+            remaining = max(0, total - current)
+            progress_ratio = remaining / total
+            progress_percent = int((remaining / total) * 100)
+            time_display = self._format_time(remaining) if self.show_time else ""
+        else:
+            # Normal progress: show elapsed time as growing bar
+            progress_ratio = min(current / total, 1.0)
+            progress_percent = int(progress_ratio * 100)
+            time_display = ""
+            if self.show_time:
+                current_time_str = self._format_time(current)
+                total_time_str = self._format_time(total)
+                time_display = f" {current_time_str}/{total_time_str}"
 
         # Create progress bar
         filled_width = int(self.width * progress_ratio)
-        bar = "█" * filled_width + "░" * (self.width - filled_width)
-
-        # Format time if requested
-        time_info = ""
-        if self.show_time:
-            current_time_str = self._format_time(current)
-            total_time_str = self._format_time(total)
-            time_info = f" {current_time_str}/{total_time_str}"
+        if countdown:
+            # For countdown: filled bar represents remaining time
+            bar = "█" * filled_width + "░" * (self.width - filled_width)
+        else:
+            # Normal: filled bar represents progress
+            bar = "█" * filled_width + "░" * (self.width - filled_width)
 
         # Create status line
-        status = f"{prefix}: [{bar}] {progress_percent:3d}%{time_info}{suffix}"
+        if countdown:
+            status = f"{prefix}: [{bar}] remaining ({time_display}){suffix}"
+        else:
+            status = f"{prefix}: [{bar}] {progress_percent:3d}%{time_display}{suffix}"
 
         # Only update if different to avoid flicker
         if status != self.last_display:
@@ -90,7 +103,8 @@ def wait_until_start_time(start_time_str):
                 
                 progress_bar.update(elapsed, wait_seconds, 
                                   prefix="Waiting", 
-                                  suffix=f" ({int(remaining)}s remaining)")
+                                  suffix="", 
+                                  countdown=True)
                 
                 if elapsed >= wait_seconds:
                     break
@@ -104,8 +118,22 @@ def wait_until_start_time(start_time_str):
         print("Error: Invalid time format. Please use HH:MM format (24-hour)")
         sys.exit(1)
 
-def record_stream(url, output_file, duration_seconds, max_retries=500, retry_delay=5, connection_timeout=30):
-    """Record the stream for the specified duration with retry logic and append support"""
+def record_stream(url, output_file, duration_seconds, max_retries=500, retry_delay=5, connection_timeout=30, quiet=False):
+    """
+    Record the stream for the specified duration with retry logic and append support
+    
+    Args:
+        url: Stream URL to record from
+        output_file: Output filename
+        duration_seconds: Duration to record in seconds
+        max_retries: Maximum retry attempts on failure
+        retry_delay: Initial delay between retries
+        connection_timeout: Connection timeout in seconds
+        quiet: If True, suppress progress output (for background threading)
+    
+    Returns:
+        dict: Recording result with 'success', 'file', 'size_mb', 'duration', 'error' keys
+    """
     # Create output directory if it doesn't exist
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
     
@@ -114,13 +142,15 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
     initial_bytes = 0
     if file_exists:
         initial_bytes = os.path.getsize(output_file)
-        print(f"Existing file found: {output_file} ({initial_bytes / (1024 * 1024):.1f} MB)")
-        print("Will append to existing file upon connection")
+        if not quiet:
+            print(f"Existing file found: {output_file} ({initial_bytes / (1024 * 1024):.1f} MB)")
+            print("Will append to existing file upon connection")
     
-    print(f"Starting recording from {url}")
-    print(f"Output file: {output_file}")
-    print(f"Duration: {duration_seconds // 3600}h {(duration_seconds % 3600) // 60}m {duration_seconds % 60}s")
-    print(f"Max retries: {max_retries}, Retry delay: {retry_delay}s, Timeout: {connection_timeout}s")
+    if not quiet:
+        print(f"Starting recording from {url}")
+        print(f"Output file: {output_file}")
+        print(f"Duration: {duration_seconds // 3600}h {(duration_seconds % 3600) // 60}m {duration_seconds % 60}s")
+        print(f"Max retries: {max_retries}, Retry delay: {retry_delay}s, Timeout: {connection_timeout}s")
     
     start_time = time.time()
     total_bytes_written = initial_bytes
@@ -128,32 +158,36 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
     current_retry_delay = retry_delay
     
     # Initialize progress bar
-    progress_bar = ProgressBar(width=40)
+    progress_bar = ProgressBar(width=40) if not quiet else None
     last_progress_update = 0
     
     while True:
         try:
-            print(f"\n{'='*50}")
-            if retry_count == 0:
-                print("Attempting initial connection...")
-            else:
-                print(f"Retry attempt {retry_count}/{max_retries}...")
+            if not quiet:
+                print(f"\n{'='*50}")
+                if retry_count == 0:
+                    print("Attempting initial connection...")
+                else:
+                    print(f"Retry attempt {retry_count}/{max_retries}...")
             
             # Calculate elapsed time and remaining duration
             elapsed_time = time.time() - start_time
             remaining_duration = duration_seconds - elapsed_time
             
             if remaining_duration <= 0:
-                print("Recording duration completed!")
+                if not quiet:
+                    print("Recording duration completed!")
                 break
             
-            print(f"Remaining time: {int(remaining_duration // 3600)}h {int((remaining_duration % 3600) // 60)}m {int(remaining_duration % 60)}s")
+            if not quiet:
+                print(f"Remaining time: {int(remaining_duration // 3600)}h {int((remaining_duration % 3600) // 60)}m {int(remaining_duration % 60)}s")
             
             # Attempt connection
             response = requests.get(url, stream=True, timeout=connection_timeout)
             response.raise_for_status()
             
-            print("✓ Connection established successfully!")
+            if not quiet:
+                print("✓ Connection established successfully!")
             retry_count = 0  # Reset retry count on successful connection
             current_retry_delay = retry_delay  # Reset delay
             
@@ -172,52 +206,132 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
                         total_elapsed = current_time - start_time
                         
                         if total_elapsed >= duration_seconds:
-                            progress_bar.clear()
-                            print("\nRecording duration reached!")
-                            return
+                            if progress_bar:
+                                progress_bar.clear()
+                            if not quiet:
+                                print("\nRecording duration reached!")
+                            return {
+                                'success': True,
+                                'file': output_file,
+                                'size_mb': total_bytes_written / (1024 * 1024),
+                                'duration': total_elapsed,
+                                'error': None
+                            }
                         
                         # Update progress bar continuously
-                        if current_time - last_progress_update >= 1.0:  # Update every second
+                        if progress_bar and current_time - last_progress_update >= 1.0:  # Update every second
                             mb_written = total_bytes_written / (1024 * 1024)
                             progress_bar.update(total_elapsed, duration_seconds, 
                                               prefix="Recording", 
                                               suffix=f" ({mb_written:.1f} MB)")
                             last_progress_update = current_time
             
-            # If we reach here, the stream ended naturally
-            progress_bar.clear()
-            print("\nStream ended naturally")
-            break
+            # If we reach here, the stream ended but duration not complete
+            # This is likely a disconnection, not a natural end - retry!
+            elapsed_time = time.time() - start_time
+            if elapsed_time < duration_seconds:
+                retry_count += 1
+                if progress_bar:
+                    progress_bar.clear()
+                if not quiet:
+                    print(f"\n⚠️  Stream disconnected early (after {int(elapsed_time)}s of {duration_seconds}s)")
+                    print(f"   Progress: {total_bytes_written / (1024 * 1024):.1f} MB recorded")
+                    print(f"   This was retry attempt {retry_count}/{max_retries}")
+                
+                if retry_count > max_retries:
+                    if not quiet:
+                        print(f"\n✗ Maximum retry attempts ({max_retries}) exceeded. Giving up.")
+                        print(f"Partial recording saved: {output_file}")
+                        print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
+                    return {
+                        'success': False,
+                        'file': output_file,
+                        'size_mb': total_bytes_written / (1024 * 1024),
+                        'duration': elapsed_time,
+                        'error': f'Max retries ({max_retries}) exceeded'
+                    }
+                
+                # Exponential backoff with jitter
+                jitter = random.uniform(0.5, 1.5)
+                sleep_time = current_retry_delay * jitter
+                if not quiet:
+                    print(f"   Waiting {sleep_time:.1f} seconds before retry...")
+                time.sleep(sleep_time)
+                
+                # Increase delay for next retry
+                current_retry_delay = min(current_retry_delay * 2, 60)
+                
+                # We have data now, so append mode for next attempt
+                file_exists = True
+                continue
+            else:
+                if progress_bar:
+                    progress_bar.clear()
+                if not quiet:
+                    print("\nRecording duration completed!")
+                return {
+                    'success': True,
+                    'file': output_file,
+                    'size_mb': total_bytes_written / (1024 * 1024),
+                    'duration': elapsed_time,
+                    'error': None
+                }
             
         except KeyboardInterrupt:
-            progress_bar.clear()
-            print("\nRecording interrupted by user")
-            print(f"Partial recording saved: {output_file}")
-            print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
-            sys.exit(0)
+            if progress_bar:
+                progress_bar.clear()
+            if not quiet:
+                print("\nRecording interrupted by user")
+                print(f"Partial recording saved: {output_file}")
+                print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
+            return {
+                'success': False,
+                'file': output_file,
+                'size_mb': total_bytes_written / (1024 * 1024),
+                'duration': time.time() - start_time,
+                'error': 'User interrupted'
+            }
             
         except (requests.exceptions.RequestException, OSError) as e:
             retry_count += 1
-            print(f"✗ Connection failed: {e}")
+            if not quiet:
+                print(f"✗ Connection failed: {e}")
             
             if retry_count > max_retries:
-                progress_bar.clear()
-                print(f"\nMaximum retry attempts ({max_retries}) exceeded. Giving up.")
-                print(f"Partial recording saved: {output_file}")
-                print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
-                sys.exit(1)
+                if progress_bar:
+                    progress_bar.clear()
+                if not quiet:
+                    print(f"\nMaximum retry attempts ({max_retries}) exceeded. Giving up.")
+                    print(f"Partial recording saved: {output_file}")
+                    print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
+                return {
+                    'success': False,
+                    'file': output_file,
+                    'size_mb': total_bytes_written / (1024 * 1024),
+                    'duration': time.time() - start_time,
+                    'error': str(e)
+                }
             
             # Calculate elapsed time to check if we should continue
             elapsed_time = time.time() - start_time
             if elapsed_time >= duration_seconds:
-                progress_bar.clear()
-                print("\nRecording duration completed during retry attempts!")
-                break
+                if progress_bar:
+                    progress_bar.clear()
+                if not quiet:
+                    print("\nRecording duration completed during retry attempts!")
+                return {
+                    'success': True,
+                    'file': output_file,
+                    'size_mb': total_bytes_written / (1024 * 1024),
+                    'duration': elapsed_time,
+                    'error': None
+                }
             
             # Exponential backoff with jitter
             jitter = random.uniform(0.5, 1.5)
             sleep_time = current_retry_delay * jitter
-            print(f"Waiting {sleep_time:.1f} seconds before retry...")
+            if not quiet:
+                print(f"Waiting {sleep_time:.1f} seconds before retry...")
             time.sleep(sleep_time)
             
             # Increase delay for next retry (exponential backoff)
@@ -228,18 +342,37 @@ def record_stream(url, output_file, duration_seconds, max_retries=500, retry_del
                 file_exists = True
         
         except Exception as e:
-            progress_bar.clear()
-            print(f"\nUnexpected error during recording: {e}")
-            print(f"Partial recording saved: {output_file}")
-            print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
-            sys.exit(1)
+            if progress_bar:
+                progress_bar.clear()
+            if not quiet:
+                print(f"\nUnexpected error during recording: {e}")
+                print(f"Partial recording saved: {output_file}")
+                print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
+            return {
+                'success': False,
+                'file': output_file,
+                'size_mb': total_bytes_written / (1024 * 1024),
+                'duration': time.time() - start_time,
+                'error': str(e)
+            }
     
-    progress_bar.clear()
-    print(f"\nRecording completed! File saved as: {output_file}")
-    print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
-    if initial_bytes > 0:
-        new_bytes = total_bytes_written - initial_bytes
-        print(f"New data written: {new_bytes / (1024 * 1024):.1f} MB")
+    # Should not reach here, but just in case
+    if progress_bar:
+        progress_bar.clear()
+    if not quiet:
+        print(f"\nRecording completed! File saved as: {output_file}")
+        print(f"Total size: {total_bytes_written / (1024 * 1024):.1f} MB")
+        if initial_bytes > 0:
+            new_bytes = total_bytes_written - initial_bytes
+            print(f"New data written: {new_bytes / (1024 * 1024):.1f} MB")
+    
+    return {
+        'success': True,
+        'file': output_file,
+        'size_mb': total_bytes_written / (1024 * 1024),
+        'duration': time.time() - start_time,
+        'error': None
+    }
 
 def main():
     parser = argparse.ArgumentParser(
@@ -319,8 +452,11 @@ Examples:
         args.output += '.mp3'
     
     # Start recording
-    record_stream(args.url, args.output, duration_seconds, 
+    result = record_stream(args.url, args.output, duration_seconds, 
                   args.max_retries, args.retry_delay, args.connection_timeout)
+    
+    # Exit with appropriate code
+    sys.exit(0 if result['success'] else 1)
 
 if __name__ == "__main__":
     main()
